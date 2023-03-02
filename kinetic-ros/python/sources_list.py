@@ -31,22 +31,25 @@ from __future__ import print_function
 
 import os
 import sys
-import tempfile
 import yaml
-import hashlib
 try:
     from urllib.request import urlopen
     from urllib.error import URLError
+    import urllib.request as request
 except ImportError:
     from urllib2 import urlopen
     from urllib2 import URLError
+    import urllib2 as request
 try:
     import cPickle as pickle
 except ImportError:
     import pickle
 
+from .cache_tools import compute_filename_hash, PICKLE_CACHE_EXT, write_atomic, write_cache_file
 from .core import InvalidData, DownloadFailure, CachePermissionError
 from .gbpdistro_support import get_gbprepo_as_rosdep_data, download_gbpdistro_as_rosdep_data
+from .meta import MetaDatabase
+from ._version import __version__
 
 try:
     import urlparse
@@ -78,7 +81,6 @@ SOURCES_CACHE_DIR = 'sources.cache'
 CACHE_INDEX = 'index'
 
 # extension for binary cache
-PICKLE_CACHE_EXT = '.pickle'
 SOURCE_PATH_ENV = 'ROSDEP_SOURCE_PATH'
 
 
@@ -304,7 +306,13 @@ def download_rosdep_data(url):
         retrieved (e.g. 404, bad YAML format, server down).
     """
     try:
-        f = urlopen(url, timeout=DOWNLOAD_TIMEOUT)
+        # http/https URLs need custom requests to specify the user-agent, since some repositories reject
+        # requests from the default user-agent.
+        if url.startswith("http://") or url.startswith("https://"):
+            url_request = request.Request(url, headers={'User-Agent': 'rosdep/{version}'.format(version=__version__)})
+        else:
+            url_request = url
+        f = urlopen(url_request, timeout=DOWNLOAD_TIMEOUT)
         text = f.read()
         f.close()
         data = yaml.safe_load(text)
@@ -440,7 +448,7 @@ def _generate_key_from_urls(urls):
 
 def update_sources_list(sources_list_dir=None, sources_cache_dir=None,
                         success_handler=None, error_handler=None,
-                        skip_eol_distros=False):
+                        skip_eol_distros=False, ros_distro=None):
     """
     Re-downloaded data from remote sources and store in cache.  Also
     update the cache index based on current sources.
@@ -485,21 +493,38 @@ def update_sources_list(sources_list_dir=None, sources_cache_dir=None,
 
     # Additional sources for ros distros
     # In compliance with REP137 and REP143
+    python_versions = {}
+
     print('Query rosdistro index %s' % get_index_url())
-    for dist_name in sorted(get_index().distributions.keys()):
+    distribution_names = get_index().distributions.keys()
+    if ros_distro is not None and ros_distro not in distribution_names:
+        raise ValueError(
+            'Requested distribution "%s" is not in the index.' % ros_distro)
+
+    for dist_name in sorted(distribution_names):
         distribution = get_index().distributions[dist_name]
-        if skip_eol_distros:
-            if distribution.get('distribution_status') == 'end-of-life':
-                print('Skip end-of-life distro "%s"' % dist_name)
+        if dist_name != ros_distro:
+            if ros_distro is not None:
+                print('Skip distro "%s" different from requested "%s"' % (dist_name, ros_distro))
                 continue
+            if skip_eol_distros:
+                if distribution.get('distribution_status') == 'end-of-life':
+                    print('Skip end-of-life distro "%s"' % dist_name)
+                    continue
         print('Add distro "%s"' % dist_name)
         rds = RosDistroSource(dist_name)
         rosdep_data = get_gbprepo_as_rosdep_data(dist_name)
+        # Store Python version from REP153
+        if distribution.get('python_version'):
+            python_versions[dist_name] = distribution.get('python_version')
         # dist_files can either be a string (single filename) or a list (list of filenames)
         dist_files = distribution['distribution']
         key = _generate_key_from_urls(dist_files)
         retval.append((rds, write_cache_file(sources_cache_dir, key, rosdep_data)))
         sources.append(rds)
+
+    # cache metadata that isn't a source list
+    MetaDatabase().set('ROS_PYTHON_VERSION', python_versions)
 
     # Create a combined index of *all* the sources.  We do all the
     # sources regardless of failures because a cache from a previous
@@ -533,73 +558,17 @@ def load_cached_sources_list(sources_cache_dir=None, verbose=False):
         if verbose:
             print('no cache index present, not loading cached sources', file=sys.stderr)
         return []
-    with open(cache_index, 'r') as f:
-        cache_data = f.read()
+    try:
+        with open(cache_index, 'r') as f:
+            cache_data = f.read()
+    except IOError as e:
+        if e.strerror == 'Permission denied':
+            raise CachePermissionError('Failed to write cache file: ' + str(e))
+        else:
+            raise
     # the loader does all the work
     model = cache_data_source_loader(sources_cache_dir, verbose=verbose)
     return parse_sources_data(cache_data, origin=cache_index, model=model)
-
-
-def compute_filename_hash(key_filenames):
-    sha_hash = hashlib.sha1()
-    if isinstance(key_filenames, list):
-        for key in key_filenames:
-            sha_hash.update(key.encode())
-    else:
-        sha_hash.update(key_filenames.encode())
-    return sha_hash.hexdigest()
-
-
-def write_cache_file(source_cache_d, key_filenames, rosdep_data):
-    """
-    :param source_cache_d: directory to write cache file to
-    :param key_filenames: filename (or list of filenames) to be used in hashing
-    :param rosdep_data: dictionary of data to serialize as YAML
-    :returns: name of file where cache is stored
-    :raises: :exc:`OSError` if cannot write to cache file/directory
-    :raises: :exc:`IOError` if cannot write to cache file/directory
-    """
-    if not os.path.exists(source_cache_d):
-        os.makedirs(source_cache_d)
-    key_hash = compute_filename_hash(key_filenames)
-    filepath = os.path.join(source_cache_d, key_hash)
-    try:
-        write_atomic(filepath + PICKLE_CACHE_EXT, pickle.dumps(rosdep_data, 2), True)
-    except OSError as e:
-        raise CachePermissionError('Failed to write cache file: ' + str(e))
-    try:
-        os.unlink(filepath)
-    except OSError:
-        pass
-    return filepath
-
-
-def write_atomic(filepath, data, binary=False):
-    # write data to new file
-    fd, filepath_tmp = tempfile.mkstemp(prefix=os.path.basename(filepath) + '.tmp.', dir=os.path.dirname(filepath))
-
-    if (binary):
-        fmode = 'wb'
-    else:
-        fmode = 'w'
-
-    with os.fdopen(fd, fmode) as f:
-        f.write(data)
-        f.close()
-
-    try:
-        # switch file atomically (if supported)
-        os.rename(filepath_tmp, filepath)
-    except OSError:
-        # fall back to non-atomic operation
-        try:
-            os.unlink(filepath)
-        except OSError:
-            pass
-        try:
-            os.rename(filepath_tmp, filepath)
-        except OSError:
-            os.unlink(filepath_tmp)
 
 
 class SourcesListLoader(RosdepLoader):

@@ -1,4 +1,4 @@
-# docker build -t ros-kinetic -f Dockerfile . 
+# docker build -t ros-kinetic -f ./kinetic-ros/Dockerfile . 
 FROM ubuntu:16.04
 
 # install lsb-release
@@ -13,13 +13,13 @@ RUN apt-key adv --keyserver 'hkp://keyserver.ubuntu.com:80' --recv-key C1CF6E31E
 # install ros kinetic base
 RUN apt-get update && apt install ros-kinetic-ros-base -y
 
-# COPY ./python/__init__.py /usr/lib/python2.7/dist-packages/rosdistro/__init__.py
-# COPY ./python/rep3.py /usr/lib/python2.7/dist-packages/rosdep2/rep3.py
-# COPY ./python/sources_list.py /usr/lib/python2.7/dist-packages/rosdep2/sources_list.py
-# COPY ./rosdistro /root/rosdistro
+COPY ./kinetic-ros/python/__init__.py /usr/lib/python2.7/dist-packages/rosdistro/__init__.py
+COPY ./kinetic-ros/python/rep3.py /usr/lib/python2.7/dist-packages/rosdep2/rep3.py
+COPY ./kinetic-ros/python/sources_list.py /usr/lib/python2.7/dist-packages/rosdep2/sources_list.py
+COPY ./rosdistro /root/rosdistro
 
 RUN rosdep init
-# RUN rosdep update --rosdistro=noetic
+RUN rosdep update
 
-# RUN echo "source /opt/ros/kinetic/setup.bash" >> ~/.bashrc
+RUN echo "source /opt/ros/kinetic/setup.bash" >> ~/.bashrc
 

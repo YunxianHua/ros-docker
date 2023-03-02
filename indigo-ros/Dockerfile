@@ -1,4 +1,4 @@
-# docker build -t ros-indigo -f Dockerfile . 
+# docker build -t ros-indigo -f ./indigo-ros/Dockerfile . 
 FROM ubuntu:14.04
 
 ENV ROS_DISTRO=indigo
@@ -15,9 +15,9 @@ RUN apt-key adv --keyserver 'hkp://keyserver.ubuntu.com:80' --recv-key 421C365BD
 # install ros indigo base
 RUN apt-get update && apt install ros-indigo-ros-base -y --force-yes
 
-COPY ./python/__init__.py /usr/lib/python2.7/dist-packages/rosdistro/__init__.py
-COPY ./python/rep3.py /usr/lib/python2.7/dist-packages/rosdep2/rep3.py
-COPY ./python/sources_list.py /usr/lib/python2.7/dist-packages/rosdep2/sources_list.py
+COPY ./indigo-ros/python/__init__.py /usr/lib/python2.7/dist-packages/rosdistro/__init__.py
+COPY ./indigo-ros/python/rep3.py /usr/lib/python2.7/dist-packages/rosdep2/rep3.py
+COPY ./indigo-ros/python/sources_list.py /usr/lib/python2.7/dist-packages/rosdep2/sources_list.py
 COPY ./rosdistro /root/rosdistro
 
 RUN rosdep init && rosdep update --rosdistro $ROS_DISTRO
