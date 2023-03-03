@@ -20,7 +20,7 @@ COPY ./indigo-ros/python/rep3.py /usr/lib/python2.7/dist-packages/rosdep2/rep3.p
 COPY ./indigo-ros/python/sources_list.py /usr/lib/python2.7/dist-packages/rosdep2/sources_list.py
 COPY ./rosdistro /root/rosdistro
 
-RUN rosdep init && rosdep update --rosdistro $ROS_DISTRO
+RUN rosdep init && rosdep update --include-eol-distros
 
 RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> ~/.bashrc
 
